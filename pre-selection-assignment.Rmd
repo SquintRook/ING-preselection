@@ -1,0 +1,434 @@
+---
+title: "Quantitative Analysis of Cash Withdrawals"
+author: "Mateusz Dadej"
+date: "28th of April 2019"
+output:  
+  pdf_document: 
+    toc: yes
+    fig_height: 4
+  html_document:
+    df_print: paged
+    toc: yes
+    fig_height: 4
+subtitle: Pre-selection assignment for ING Bank Śląski
+abstract: The Subject of herein analysis is modelling and risk analysis of cash withdrawals from one of the branches of ING Bank Śląski from the beggining of 2018 to end of march 2019. The analysis is mostly of quantitative character as many of the methods used, are present in statistical or mathematical textbooks. Although, every quantitative analysis later on is interpreted in a qualitative way. This analysis was conducted for pre-selection to Lion's Den Risk Modelling Challenge organized by ING Bank Śląski & ING Tech Poland.
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+Sys.setenv(lang = "en")
+
+setwd("C:/Users/HP/Documents/R/projekty/ing")
+
+library(rlang)
+library(readxl)
+library(tidyverse)
+library(lubridate)
+library(e1071)
+library(ggplot2)
+library(ggpubr)
+library(gridExtra)
+library(knitr)
+
+Sys.setenv(LANG = "en")
+
+df <- read.table("https://mandrillapp.com/track/click/30530312/evenea.pl?p=eyJzIjoiOS1JQ1d5RmJVd3BTS0xRU1BxUktfOGFWc0hJIiwidiI6MSwicCI6IntcInVcIjozMDUzMDMxMixcInZcIjoxLFwidXJsXCI6XCJodHRwczpcXFwvXFxcL2V2ZW5lYS5wbFxcXC9cXFwvZmlsZVxcXC91c2VyXFxcL2V2ZW50X2ZpbGVzXFxcLzgzNzIwNlxcXC80NzZlM2IzZGJiN2M3NmY2NjgwYzMzYmE1MDdjMjIzNi5jc3ZcIixcImlkXCI6XCJmZTNlNzNhY2ZkNTY0OWJhYjI2NDViZmYyOWVlYTE0M1wiLFwidXJsX2lkc1wiOltcImU0ODNmYTExZjA5NmYzMDAxYTQ5MDE1OGFkZWYwMWRkMGRiZmQ5NzhcIl19In0",
+                 sep = ";")%>%
+  .[-1,]%>%
+  transmute(date = dmy(V1),
+            working = V2,
+            withdrawals = as.numeric(as.character(V3)))
+
+df <- read.table("https://s3-eu-west-1.amazonaws.com/landingi-editor-uploads/Ko8IsoAM/withdrawals.csv", 
+                 sep = ";")%>%
+  .[-1,]%>%
+  transmute(date = dmy(V1),
+            working = V2,
+            withdrawals = as.numeric(as.character(V3)))
+
+#if neither of the links above works, you have to provide data set from your local pc
+
+```
+
+# Data set overview
+
+The data set, separated originally by semicolon, consists of `r nrow(df)` observations of cash withdrawals from one of ING's branches. Each with `r ncol(df)` variables: date of the day `[DD.MM.YYYY]`, working day of the branch (categorical: YES or NO) and amount of cash withdrawals made by clients. These variables were given a following names **`r colnames(df)`**. Table below shows a table of first 6 observations from data set:
+
+```{r, echo = FALSE}
+kable(head(df), caption = "First 6 observations")
+
+```
+
+As the example above shows, the data set is not free from `NAs`. These would be a normal values had it not been for the branch being closed. Ergo, if we drop the observations with `NAs` the `r colnames(df)[2]` column will consists only `YES` values.
+
+```{r, echo=FALSE}
+df.na <- drop_na(df)
+kable(
+table(df.na$working))
+```
+
+```{r, eval=FALSE}
+df.na <- drop_na(df)
+
+table(df.na$working)
+```
+
+For the sake of simplicity of code, later on we will analyse data sets with `NAs` which is `df`, as well as without - `df.na`.
+
+# Descriptive statistics 
+
+First task of the assignment is following:
+
+> *Calculate: descriptive statistics: arithmetic mean, standard deviation, quartiles,
+skewness coefficient, kurtosis*
+
+```{r, include=FALSE}
+average <- mean(df.na$withdrawals)
+media.an <- median(df.na$withdrawals)
+standard.dev <- sd(df.na$withdrawals)
+quartiles <- quantile(df.na$withdrawals)
+skew.coef <- skewness(df.na$withdrawals)
+kurt <- kurtosis(df.na$withdrawals)
+
+```
+calculations of descriptive statistics below concerns values of withdrawals.
+
+* Average: `r round(average)`
+* median: `r media.an`
+* standard deviation: `r round(standard.dev)`
+* quartiles:
+    + zeroth (minimum value) `r quartiles[1]`
+    + first `r quartiles[2]`
+    + second (median) `r quartiles[3]`
+    + third `r quartiles[4]`
+    + fourth (maximum value) `r quartiles[5]`
+* skewness coefficient: `r round(skew.coef)`
+* kurtosis: `r round(kurt)`
+
+One might already notice potential outliers in data set. There is a substantial difference between maximum value and third quartile. These outliers could potentially influence standard deviation as it is also susceptible to outliers. We will leave it for now, as it is the subject of further task.
+We define every value in case they will be important later on.
+
+# histogram of withdrawals
+
+Another task from assignment is to make a histogram of withdrawals.
+
+>*Calculate histogram of withdrawals*
+
+We will use `ggplot2` package here and later on for data visualization. Our histogram have 100 bins and additional density line.
+
+```{r, echo= FALSE}
+ggplot(data = df.na)+
+  geom_histogram(aes(x = withdrawals, y = ..density..),col = "steelblue3", bins = 100)+
+  geom_density(aes(y = ..density.., x = withdrawals), size = 0.7, col = "coral")+
+  scale_x_continuous(breaks = seq(0,max(df.na$withdrawals), 200))+
+  labs(title = "histogram of withdrawals from bank")+
+  xlab("amounts of withdrawals")
+```
+
+It is now clearly visible that our data set consists of at least two outliers located around 1 800 000 zł. For the time being, we can state that non outliers are amounts of withdrawals under 600 000 zł.
+At the first sight, the distribution of withdrawals most likely does not follow the normal distribution. We will test normality hypothesis later.
+
+# outliers in the dataset
+
+Next request is related to outliers which we spotted during previous task.
+
+> *Calculate outliers. What could be the cause of increased demand for cash and
+subsequent withdrawals?*
+
+Following our earlier remark about the range of non-outliers we shall check observations above our limit. 
+
+```{r, echo=FALSE}
+kable(
+  filter(df.na, withdrawals > 600), 
+  caption = "Outliers")
+
+```
+
+```{r, eval=FALSE}
+
+filter(df.na, withdrawals > 600)
+
+```
+
+As one may suppose, the outliers are due to extreme seasonal events during **christmas times**. What is also likely is unique desynchronization between working days of bank branch and main Christmas events. Table below shows corresponding days of outliers.
+
+```{r, eval=FALSE}
+filter(df, date > "2018-12-17" & date < "2018-12-29")
+```
+
+```{r, echo=FALSE}
+kable(
+filter(df, date > "2018-12-17" & date < "2018-12-29"),
+caption = "Outliers with their corresponding days of the month")
+
+```
+
+December 21 is the last day with open branch of the bank (22th and 23th is closed ) to 
+withdraw cash for before-Christmas shopping during the weekend, when the Saturday is also exceptionally not restricted for shopping. It is commonly known that, people tend to postpone such a trivial activities like withdrawing cash from banks or ATM's until the very last moment. 
+  
+Of course not every client want to go for a shopping during a weekend (or forget to withdraw cash), therefore there is also another day with working bank branch. December 24 is the last opportunity when it is possible to withdraw cash before Christmas (25th and 26th). These rationale, mostly explain existence of outliers in data set.
+  
+# Does withdrawals follow Gaussian distribution?
+
+>*Verify if the data on withdrawals follows normal distribution using statistical
+tests.*
+
+As density plot shown earlier may point, it is more likely than not, that the distribution is not of normal distribution. Although, we should test it to be certain. We will use ` shapiro.test()` to perform Shapiro Wilk test and make a following hypothesis
+
+
+
+$$H_0:X_w\sim{\sf N}(\mu,\sigma^{2})$$
+
+
+and first hypothesis that it does not follow normal distribution. $H_1: H_0$ is wrong
+
+The test produced following results:
+```{r, echo=FALSE}
+shapiro.test(df.na$withdrawals)
+
+```
+
+`p-value < 0.05` ergo, we can reject $H_0$ in favor of alternative hypothesis $H_1$. I.e Distribution of the withdrawals is not normal.
+
+We should redo our statistical test on data set free from outliers.
+
+```{r, echo=FALSE}
+df.na.out <- filter(df.na, withdrawals < 600) 
+shapiro.test(df.na.out$withdrawals)
+```
+ 
+The inference on this data set is the same. Both are not of normal distribution.
+
+For the sake of certainty and to analyse the way our data deviates from normal distribution, we can make a quantile - quantile plot to visualize the difference between actual distribution and Gaussian.
+
+```{r}
+ggqqplot(df.na$withdrawals) # from ggpubr package
+```
+
+As we can see, although the outliers may significantly influence our inference, the withdrawals are still not close to follow normal distribution. 
+
+# Day of the week impact on amount withdrawals
+
+Following task was given to do with the use of previously done calculations :
+
+>*Assess the impact of the **day of the week** on the size of withdrawals. Is there
+a relationship between these variables and how can these dependencies be
+justified?*
+
+The easiest way to analyse the impact of the day of the week is to look at the averages of withdrawals for every day of the week. We will use popular `dplyr` package for this.
+
+> 
+>
+>
+
+
+```{r,eval=FALSE}
+mutate(df.na, week.day = weekdays(date))%>%
+  group_by(week.day)%>%
+  summarise(average = mean(withdrawals),
+            median = median(withdrawals))%>%
+  arrange(desc(average))
+```
+
+```{r, echo=FALSE}
+df.weekday <- mutate(df.na, week.day = weekdays(date))%>%
+  group_by(week.day)%>%
+  summarise(average = mean(withdrawals),
+            median = median(withdrawals))%>%
+  arrange(desc(average))
+
+kable(df.weekday, caption = "Average and median withdrawal per day of the week.")
+```
+
+The average is indeed higher for Friday and Monday but its most likely due to the outliers
+if we look at the median, the difference virtually disappears. Friday is slightly higher than the general median. It might be explained by clients intentions to go for a shopping during upcoming weekend.
+
+Again, we will try to analyse outliers free data set in an analogous way.
+
+```{r, echo=FALSE}
+kable(
+mutate(df.na.out, week.day = weekdays(date))%>% # the same but without outliers
+  group_by(week.day)%>%
+  summarise(average = mean(withdrawals),
+            median = median(withdrawals))%>%
+  arrange(desc(average)),
+caption = "Same table but data set without outliers"
+)
+```
+
+Given the fact that standard deviation of withdrawals from this data set is `r round(sd(df.na.out$withdrawals))`, the difference between withdrawals among different days and general mean is **not significant**.
+
+```{r, echo=FALSE}
+ggplot(df.weekday)+
+  geom_col(aes(x = week.day, y = median),width = 0.8, col = "steelblue3", size = 1.2 )+
+  coord_cartesian(ylim = c(100, 300))+
+  labs(title = "Median of withdrawals from branch for every working day")
+```
+
+# day of the month impact 
+
+>*Assess the impact of the day of the month on the size of withdrawals. Is there a relationship between these variables and how can such dependencies be
+justified?*
+
+The task above might be performed in an analogous way to the previous one. Although, for the sake of better embracement of the problem, we will limit analysis to graphical visualization.
+
+```{r, echo=FALSE}
+df.monthday <- mutate(df.na, month.day = mday(date))%>%
+  group_by(month.day)%>%
+  summarise(average = mean(withdrawals),
+            median = median(withdrawals))%>%
+  as.data.frame()
+
+df.monthday.out <- mutate(df.na.out, month.day = mday(date))%>%
+  group_by(month.day)%>%
+  summarise(average = mean(withdrawals),
+            median = median(withdrawals))%>%
+  as.data.frame()
+
+month.day.avg<- ggplot(df.monthday)+
+  geom_col(aes(x = month.day, y = average),width = 0.8, col = "steelblue3", size = 0.75 )
+
+month.day.median<- ggplot(df.monthday)+
+  geom_col(aes(x = month.day, y = median),width = 0.8, col = "steelblue3", size = 0.75 )
+
+grid.arrange(month.day.avg, month.day.median, 
+             top = "average withdrawals on each day of the month")
+```
+
+First days of the month seems to be significantly higher than other days with next 3 days also higher but gradually closer to average. This might be due to wages being paid out to employees with various days at the beginning of each month depending on payday or weather it is a weekend or not. Supposedly, there are still many people living paycheck to paycheck.
+two bins are in solitude, for there are outliers within them.
+
+# Probability of withdrawal within given range
+
+>*Assuming that withdrawals follow normal distribution, what is the probability
+that withdrawals from a given day are in the range from PLN 220,000 to PLN
+250,000? Can this be confirmed by the historical data?*
+
+Although, we already find out that the data of withdrawals does not follow normal distribution, this assumption will still be accepted. However, at the end of the task we will confront it with historical data. 
+The probability can be calculated with a few methods but the author has chosen to compute definite integral of density function, applying the following equation:
+
+\begin{equation}
+\int_{r_1}^{r_2}f(x)dx=F(b)-F(a)=P(a<X<b)
+\end{equation}
+
+And the function being integrated is a standard normal density function, such that:
+
+\begin{equation}
+f(x,\mu,\sigma)=\frac{1}{\sigma\sqrt{2\pi}}e^{\frac{-(x-\mu)^2}{2\sigma^2}}, x \in R 
+\end{equation}
+
+```{r,echo=FALSE}
+
+avg.na.out <- mean(df.na.out$withdrawals)
+sd.na.out <- sd(df.na.out$withdrawals)
+lower.bound <- 220
+upper.bound <- 250
+
+```
+
+Where $r_1$ is lower limit of integration (lower range i.e. `r lower.bound` k zł) and $r_2$ is upper limit of integration (upper range i.e. `r upper.bound` k zł). $\mu$ is expected value of withdrawals and equals `r round(avg.na.out)`, $\sigma$ is standard deviation of data, which is `r round(sd.na.out)`. The rest of letters are constants ($\pi=3.1416,e=2.718$).
+
+```{r}
+
+avg.na.out <- mean(df.na.out$withdrawals) # average of withdrawals
+sd.na.out <- sd(df.na.out$withdrawals)    # standard deviation of withdrawals
+
+dens.funct <- function(x){dnorm(x = x,    # defined density function of withdrawals
+                                mean = avg.na.out, 
+                                sd = sd.na.out)} 
+                                              
+integrate(dens.funct,                         
+          lower =  lower.bound,       # lower limit of integration (lower bound of given range)
+          upper =  upper.bound)       # upper limit of integration (upper bound of a given range)
+
+```
+
+According to the result above, the likelihood that daily withdrawals will occur in a range of `r lower.bound`k  and `r upper.bound`k zł is exactly `r round(integrate(dens.funct,lower =  lower.bound,upper =  upper.bound)$value*100,2)`%. Again, assuming the normal distribution of withdrawals. 
+We can conclude that, given the range is close to the mean, the probability is rather low. It is due to the standard deviation, which is high.
+
+Graph below shows the area of the probability of withdrawals on density function. Red area is also the product of integral performed earlier.
+
+```{r, echo=FALSE}
+dens<- tibble(x = seq(qnorm(0.0001,avg.na.out,sd.na.out),
+                      qnorm(0.9999,avg.na.out,sd.na.out),0.1), 
+              y = dens.funct(x))
+
+ggplot(dens, aes(x = x, y = y))+
+  geom_line()+
+  geom_area(data = filter(dens, between(x,lower.bound,upper.bound)), fill = "steelblue3")+
+  labs(title = "Choosen range of withdrawals",
+       subtitle = paste("Between", lower.bound,"000 zł and", upper.bound,"000 zł"))+
+  xlab(label = "Amount of Withdrawals")+
+  ylab(label = "Probability density")+
+  scale_x_continuous(breaks = seq(-100,500,100))
+
+```
+
+Now we will calculate how did the probability shape, based on historical data with up to `r nrow(df.na)` observations. For that, one shall simply divide number of observation in a given range by number of every observations in the data set.
+
+```{r}
+
+nrow(filter(df.na, withdrawals >lower.bound & withdrawals < upper.bound))/nrow(df.na)
+
+```
+
+Historically, `r round(nrow(filter(df.na, withdrawals >lower.bound & withdrawals < upper.bound))/nrow(df.na)*100,2)`% of observed withdrawals were in a range of `r lower.bound` 000 to `r upper.bound` 000 zł. The difference is visible but not really big. It amounts to `r round(integrate(dens.funct,lower =  lower.bound,upper =  upper.bound)$value-(nrow(filter(df.na, withdrawals >lower.bound & withdrawals < upper.bound))/nrow(df.na)),4)*100` percentage points. 
+
+# Trend of the Withdrawals
+
+The last task is to analyse time series related to withdrawals. With the emphasis on the occurrence of the trend.
+
+>*Find the long-term trend of the withdrawals and justify the hypothesis that an
+increasing trend exists.*
+
+A standard preliminary way to define whether the trend is indeed present, is to plot a variable of interest against time during which it had been occurring. Additionally, we will also plot linear function along with its confidence interval. 
+
+``` {r, echo=FALSE}
+
+ggplot(data = df.na.out,aes(x = date, y = withdrawals))+
+  geom_line()+
+  geom_smooth(method = lm)
+
+```
+
+Increasing trend is clearly visible, as well as seasonality, somehow described earlier.
+To precisely asses and interpret the trend, we ought to estimate a parameters of linear model. For which, we will use ordinary least square method. The functional form of prespecified mode is following:
+
+$$ y_t = \alpha + \beta_1x_{t} + \xi_t $$
+
+Where, response variable $y_t$ is amount of withdrawals in a day $t$, $\beta_1$ Coefficient, estimated with OLS, for variable $x_{t}$ which represents date. And error term $xi_t$.
+
+Summary below shows statistics of the fitted linear model, shown and described above.
+
+```{r, echo=FALSE}
+
+model <- lm( df.na.out$withdrawals ~ df.na.out$date)
+
+summary(model)
+
+```
+
+Variables are statistically significant. p-value is way below 0.05 threshold. Thus, the slope coefficient and upward trend is indeed significant. 
+variable coefficient equals `r round(summary(model)$coefficients[2,1],3)`. Therefore, with every day (no matter if its not working) the amount of withdrawal theoretically increases by `r  round(summary(model)$coefficients[2,1],5)*1000` zł. 
+
+# References
+
+* *Staystyka Matematyczna, M. Sobczyk, C. H. Beck, 2010*
+* *Mathematics and Statistics for Financial Risk Management, M. B. Miller, Wiley, 2014*
+* *Język R, H. Wickham, G. Grolemund, Helion, 2018*
+* *Data set provided by ING Bank Śląski*
+
+# packages used
+
+* `rlang`
+* `readxl`
+* `tidyverse`
+* `lubridate`
+* `e1071`
+* `ggplot2`
+* `ggpubr`
+* `gridExtra`
+* `knitr`
+
